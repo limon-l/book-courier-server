@@ -13,7 +13,7 @@ app.use(
       "http://localhost:5173",
       "https://book-courier-client.web.app",
       "https://book-courier-client.firebaseapp.com",
-      "https://lighthouselibrary.vercel.app/",
+      "https://lighthouselibrary.vercel.app",
     ],
     credentials: true,
   })
@@ -32,6 +32,9 @@ const client = new MongoClient(uri, {
 
 async function run() {
   try {
+    await client.connect();
+    console.log("Connected to MongoDB");
+
     const userCollection = client.db("bookCourierDb").collection("users");
     const bookCollection = client.db("bookCourierDb").collection("books");
     const orderCollection = client.db("bookCourierDb").collection("orders");
@@ -65,8 +68,7 @@ async function run() {
 
     const verifyAdmin = async (req, res, next) => {
       const email = req.decoded.email;
-      const query = { email: email };
-      const user = await userCollection.findOne(query);
+      const user = await userCollection.findOne({ email });
       const isAdmin = user?.role === "admin";
       if (!isAdmin) {
         return res.status(403).send({ message: "forbidden access" });
@@ -76,8 +78,7 @@ async function run() {
 
     const verifyLibrarian = async (req, res, next) => {
       const email = req.decoded.email;
-      const query = { email: email };
-      const user = await userCollection.findOne(query);
+      const user = await userCollection.findOne({ email });
       const isLibrarian = user?.role === "librarian";
       if (!isLibrarian) {
         return res.status(403).send({ message: "forbidden access" });
@@ -95,19 +96,13 @@ async function run() {
       if (email !== req.decoded.email) {
         return res.status(403).send({ message: "forbidden access" });
       }
-      const query = { email: email };
-      const user = await userCollection.findOne(query);
-      let role = "user";
-      if (user) {
-        role = user?.role || "user";
-      }
-      res.send({ role });
+      const user = await userCollection.findOne({ email });
+      res.send({ role: user?.role || "user" });
     });
 
     app.post("/users", async (req, res) => {
       const user = req.body;
-      const query = { email: user.email };
-      const existingUser = await userCollection.findOne(query);
+      const existingUser = await userCollection.findOne({ email: user.email });
       if (existingUser) {
         return res.send({ message: "user already exists", insertedId: null });
       }
@@ -140,7 +135,6 @@ async function run() {
         res.send(result);
       }
     );
-
 
     app.get("/books", async (req, res) => {
       const filter = req.query.category ? { category: req.query.category } : {};
@@ -183,31 +177,22 @@ async function run() {
         res.send(result);
       }
     );
-
     app.get("/books/:id", async (req, res) => {
       try {
         const id = req.params.id;
         if (!ObjectId.isValid(id)) {
           return res.status(400).send({ message: "Invalid Book ID format" });
         }
-
-        const query = { _id: new ObjectId(id) };
-        const result = await bookCollection.findOne(query);
-
-        if (!result) {
-          return res.status(404).send({ message: "Book not found" });
-        }
-
+        const result = await bookCollection.findOne({ _id: new ObjectId(id) });
+        if (!result) return res.status(404).send({ message: "Book not found" });
         res.send(result);
       } catch (error) {
-        console.error("Error fetching book:", error);
         res.status(500).send({ message: "Internal Server Error" });
       }
     });
 
     app.post("/books", verifyToken, verifyLibrarian, async (req, res) => {
-      const item = req.body;
-      const result = await bookCollection.insertOne(item);
+      const result = await bookCollection.insertOne(req.body);
       res.send(result);
     });
 
@@ -232,8 +217,7 @@ async function run() {
 
     app.delete("/books/:id", verifyToken, verifyAdmin, async (req, res) => {
       const id = req.params.id;
-      const query = { _id: new ObjectId(id) };
-      const result = await bookCollection.deleteOne(query);
+      const result = await bookCollection.deleteOne({ _id: new ObjectId(id) });
       res.send(result);
     });
 
@@ -244,11 +228,10 @@ async function run() {
       async (req, res) => {
         const id = req.params.id;
         const { status } = req.body;
-        const filter = { _id: new ObjectId(id) };
-        const updatedDoc = {
-          $set: { status: status },
-        };
-        const result = await bookCollection.updateOne(filter, updatedDoc);
+        const result = await bookCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: { status: status } }
+        );
         res.send(result);
       }
     );
@@ -256,16 +239,18 @@ async function run() {
       const email = req.query.email;
       if (email !== req.decoded.email)
         return res.status(403).send({ message: "forbidden" });
-      const query = { userEmail: email };
-      const result = await orderCollection.find(query).toArray();
+      const result = await orderCollection.find({ userEmail: email }).toArray();
       res.send(result);
     });
     app.get("/orders/:id", verifyToken, async (req, res) => {
       const id = req.params.id;
-      const query = { _id: new ObjectId(id) };
-      const result = await orderCollection.findOne(query);
+      if (!ObjectId.isValid(id)) {
+        return res.status(400).send({ message: "Invalid Order ID" });
+      }
+      const result = await orderCollection.findOne({ _id: new ObjectId(id) });
       res.send(result);
     });
+
     app.get(
       "/orders/librarian/:email",
       verifyToken,
@@ -274,22 +259,22 @@ async function run() {
         const email = req.params.email;
         if (email !== req.decoded.email)
           return res.status(403).send({ message: "forbidden" });
-        const query = { librarianEmail: email };
-        const result = await orderCollection.find(query).toArray();
+        const result = await orderCollection
+          .find({ librarianEmail: email })
+          .toArray();
         res.send(result);
       }
     );
 
     app.post("/orders", verifyToken, async (req, res) => {
-      const order = req.body;
-      const result = await orderCollection.insertOne(order);
+      const result = await orderCollection.insertOne(req.body);
       res.send(result);
     });
 
     app.delete("/orders/:id", verifyToken, async (req, res) => {
-      const id = req.params.id;
-      const query = { _id: new ObjectId(id) };
-      const result = await orderCollection.deleteOne(query);
+      const result = await orderCollection.deleteOne({
+        _id: new ObjectId(req.params.id),
+      });
       res.send(result);
     });
 
@@ -300,89 +285,79 @@ async function run() {
       async (req, res) => {
         const id = req.params.id;
         const { status } = req.body;
-        const filter = { _id: new ObjectId(id) };
-        const updatedDoc = {
-          $set: { status: status },
-        };
-        const result = await orderCollection.updateOne(filter, updatedDoc);
+        const result = await orderCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: { status: status } }
+        );
         res.send(result);
       }
     );
 
     app.get("/wishlist", verifyToken, async (req, res) => {
-      const email = req.query.email;
-      const query = { email: email };
-      const result = await wishlistCollection.find(query).toArray();
+      const result = await wishlistCollection
+        .find({ email: req.query.email })
+        .toArray();
       res.send(result);
     });
 
     app.post("/wishlist", verifyToken, async (req, res) => {
-      const wishlist = req.body;
-      const result = await wishlistCollection.insertOne(wishlist);
+      const result = await wishlistCollection.insertOne(req.body);
       res.send(result);
     });
 
     app.delete("/wishlist/:id", verifyToken, async (req, res) => {
-      const id = req.params.id;
-      const query = { _id: new ObjectId(id) };
-      const result = await wishlistCollection.deleteOne(query);
+      const result = await wishlistCollection.deleteOne({
+        _id: new ObjectId(req.params.id),
+      });
       res.send(result);
     });
 
     app.get("/reviews/:bookId", async (req, res) => {
-      const bookId = req.params.bookId;
-      const query = { bookId: bookId };
-      const result = await reviewCollection.find(query).toArray();
+      const result = await reviewCollection
+        .find({ bookId: req.params.bookId })
+        .toArray();
       res.send(result);
     });
 
     app.post("/reviews", verifyToken, async (req, res) => {
-      const review = req.body;
-      const result = await reviewCollection.insertOne(review);
+      const result = await reviewCollection.insertOne(req.body);
       res.send(result);
     });
 
     app.post("/create-payment-intent", verifyToken, async (req, res) => {
       const { price } = req.body;
       const amount = parseInt(price * 100);
-
       const paymentIntent = await stripe.paymentIntents.create({
         amount: amount,
         currency: "usd",
         payment_method_types: ["card"],
       });
-
-      res.send({
-        clientSecret: paymentIntent.client_secret,
-      });
+      res.send({ clientSecret: paymentIntent.client_secret });
     });
 
     app.get("/payments", verifyToken, async (req, res) => {
-      const query = { email: req.query.email };
-      if (req.query.email !== req.decoded.email) {
+      const email = req.query.email;
+      if (email !== req.decoded.email)
         return res.status(403).send({ message: "forbidden access" });
-      }
-      const result = await paymentCollection.find(query).toArray();
+      const result = await paymentCollection.find({ email }).toArray();
       res.send(result);
     });
 
     app.post("/payments", verifyToken, async (req, res) => {
       const payment = req.body;
       const paymentResult = await paymentCollection.insertOne(payment);
-      const query = { _id: new ObjectId(payment.orderId) };
-      const updatedDoc = {
-        $set: {
-          paymentStatus: "paid",
-          status: "pending",
-        },
-      };
-      const deleteResult = await orderCollection.updateOne(query, updatedDoc);
 
-      const bookQuery = { _id: new ObjectId(payment.bookId) };
-      const bookUpdate = { $inc: { quantity: -1 } };
-      const bookResult = await bookCollection.updateOne(bookQuery, bookUpdate);
+      const deleteResult = await orderCollection.updateOne(
+        { _id: new ObjectId(payment.orderId) },
+        { $set: { paymentStatus: "paid", status: "pending" } }
+      );
 
-      res.send({ paymentResult, deleteResult, bookResult });
+      const bookUpdate = await bookCollection.updateOne(
+        { _id: new ObjectId(payment.bookId) },
+        { $inc: { quantity: -1 } }
+      );
+
+      res.send({ paymentResult, deleteResult, bookUpdate });
     });
 
     app.get("/", (req, res) => {
