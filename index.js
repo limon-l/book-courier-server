@@ -102,7 +102,6 @@ app.post("/jwt", async (req, res) => {
   res.send({ token });
 });
 
-// Users
 app.get("/users", verifyToken, verifyAdmin, async (req, res) => {
   const database = await connectDB();
   const result = await database.collection("users").find().toArray();
@@ -362,18 +361,34 @@ app.delete("/wishlist/:id", verifyToken, async (req, res) => {
 });
 
 app.get("/reviews/:bookId", async (req, res) => {
-  const database = await connectDB();
-  const result = await database
-    .collection("reviews")
-    .find({ bookId: req.params.bookId })
-    .toArray();
-  res.send(result);
+  try {
+    const database = await connectDB();
+    const bookId = req.params.bookId;
+
+    const result = await database
+      .collection("reviews")
+      .find({ bookId: bookId })
+      .sort({ date: -1 })
+      .toArray();
+
+    res.send(result);
+  } catch (error) {
+    res.status(500).send({ message: "Error fetching reviews" });
+  }
 });
 
 app.post("/reviews", verifyToken, async (req, res) => {
-  const database = await connectDB();
-  const result = await database.collection("reviews").insertOne(req.body);
-  res.send(result);
+  try {
+    const database = await connectDB();
+    const review = req.body;
+
+    review.date = new Date();
+
+    const result = await database.collection("reviews").insertOne(review);
+    res.send(result);
+  } catch (error) {
+    res.status(500).send({ message: "Error saving review" });
+  }
 });
 
 app.post("/create-payment-intent", verifyToken, async (req, res) => {
