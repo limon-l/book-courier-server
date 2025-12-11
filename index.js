@@ -80,7 +80,7 @@ const verifyLibrarian = async (req, res, next) => {
     const email = req.decoded.email;
     const database = await connectDB();
     const user = await database.collection("users").findOne({ email });
-    const isLibrarian = user?.role === "librarian";
+    const isLibrarian = user?.role === "librarian" || user?.role === "admin";
     if (!isLibrarian) {
       return res.status(403).send({ message: "forbidden access" });
     }
@@ -183,7 +183,7 @@ app.get("/books", async (req, res) => {
       .toArray();
     res.send(result);
   } catch (error) {
-    console.log(error);
+    console.error(error);
     res.status(500).send({ message: "Error fetching books" });
   }
 });
