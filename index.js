@@ -11,8 +11,8 @@ app.use(
   cors({
     origin: [
       "http://localhost:5173",
-      "https://book-courier-client.web.app",
-      "https://book-courier-client.firebaseapp.com",
+      // "https://book-courier-client.web.app",
+      // "https://book-courier-client.firebaseapp.com",
       "https://lighthouselibrary.vercel.app",
     ],
     credentials: true,
