@@ -30,11 +30,20 @@ const client = new MongoClient(uri, {
   },
 });
 
-async function getCollection(collectionName) {
-  if (!client.topology || !client.topology.isConnected()) {
-    await client.connect();
+let db;
+
+async function connectDB() {
+  if (db) return db;
+  try {
+    if (!client.topology || !client.topology.isConnected()) {
+      await client.connect();
+    }
+    db = client.db("bookCourierDb");
+    return db;
+  } catch (error) {
+    console.error("MongoDB Connection Error:", error);
+    throw error;
   }
-  return client.db("bookCourierDb").collection(collectionName);
 }
 
 const verifyToken = (req, res, next) => {
@@ -52,25 +61,33 @@ const verifyToken = (req, res, next) => {
 };
 
 const verifyAdmin = async (req, res, next) => {
-  const email = req.decoded.email;
-  const users = await getCollection("users");
-  const user = await users.findOne({ email });
-  const isAdmin = user?.role === "admin";
-  if (!isAdmin) {
-    return res.status(403).send({ message: "forbidden access" });
+  try {
+    const email = req.decoded.email;
+    const database = await connectDB();
+    const user = await database.collection("users").findOne({ email });
+    const isAdmin = user?.role === "admin";
+    if (!isAdmin) {
+      return res.status(403).send({ message: "forbidden access" });
+    }
+    next();
+  } catch (error) {
+    res.status(500).send({ message: "Middleware Error" });
   }
-  next();
 };
 
 const verifyLibrarian = async (req, res, next) => {
-  const email = req.decoded.email;
-  const users = await getCollection("users");
-  const user = await users.findOne({ email });
-  const isLibrarian = user?.role === "librarian";
-  if (!isLibrarian) {
-    return res.status(403).send({ message: "forbidden access" });
+  try {
+    const email = req.decoded.email;
+    const database = await connectDB();
+    const user = await database.collection("users").findOne({ email });
+    const isLibrarian = user?.role === "librarian";
+    if (!isLibrarian) {
+      return res.status(403).send({ message: "forbidden access" });
+    }
+    next();
+  } catch (error) {
+    res.status(500).send({ message: "Middleware Error" });
   }
-  next();
 };
 
 app.get("/", (req, res) => {
@@ -87,8 +104,8 @@ app.post("/jwt", async (req, res) => {
 
 // Users
 app.get("/users", verifyToken, verifyAdmin, async (req, res) => {
-  const users = await getCollection("users");
-  const result = await users.find().toArray();
+  const database = await connectDB();
+  const result = await database.collection("users").find().toArray();
   res.send(result);
 });
 
@@ -97,28 +114,32 @@ app.get("/users/role/:email", verifyToken, async (req, res) => {
   if (email !== req.decoded.email) {
     return res.status(403).send({ message: "forbidden access" });
   }
-  const users = await getCollection("users");
-  const user = await users.findOne({ email });
+  const database = await connectDB();
+  const user = await database.collection("users").findOne({ email });
   res.send({ role: user?.role || "user" });
 });
 
 app.post("/users", async (req, res) => {
   const user = req.body;
-  const users = await getCollection("users");
-  const existingUser = await users.findOne({ email: user.email });
+  const database = await connectDB();
+  const existingUser = await database
+    .collection("users")
+    .findOne({ email: user.email });
   if (existingUser) {
     return res.send({ message: "user already exists", insertedId: null });
   }
-  const result = await users.insertOne(user);
+  const result = await database.collection("users").insertOne(user);
   res.send(result);
 });
 
 app.patch("/users/admin/:id", verifyToken, verifyAdmin, async (req, res) => {
-  const users = await getCollection("users");
-  const result = await users.updateOne(
-    { _id: new ObjectId(req.params.id) },
-    { $set: { role: "admin" } }
-  );
+  const database = await connectDB();
+  const result = await database
+    .collection("users")
+    .updateOne(
+      { _id: new ObjectId(req.params.id) },
+      { $set: { role: "admin" } }
+    );
   res.send(result);
 });
 
@@ -127,39 +148,50 @@ app.patch(
   verifyToken,
   verifyAdmin,
   async (req, res) => {
-    const users = await getCollection("users");
-    const result = await users.updateOne(
-      { _id: new ObjectId(req.params.id) },
-      { $set: { role: "librarian" } }
-    );
+    const database = await connectDB();
+    const result = await database
+      .collection("users")
+      .updateOne(
+        { _id: new ObjectId(req.params.id) },
+        { $set: { role: "librarian" } }
+      );
     res.send(result);
   }
 );
 
 app.get("/books", async (req, res) => {
-  const books = await getCollection("books");
-  const filter = req.query.category ? { category: req.query.category } : {};
+  try {
+    const database = await connectDB();
+    const filter = req.query.category ? { category: req.query.category } : {};
 
-  if (req.query.search) {
-    filter.$or = [
-      { title: { $regex: req.query.search, $options: "i" } },
-      { author: { $regex: req.query.search, $options: "i" } },
-    ];
+    if (req.query.search) {
+      filter.$or = [
+        { title: { $regex: req.query.search, $options: "i" } },
+        { author: { $regex: req.query.search, $options: "i" } },
+      ];
+    }
+
+    filter.status = "published";
+
+    let sortOptions = {};
+    if (req.query.sort === "price-asc") sortOptions = { price: 1 };
+    if (req.query.sort === "price-desc") sortOptions = { price: -1 };
+
+    const result = await database
+      .collection("books")
+      .find(filter)
+      .sort(sortOptions)
+      .toArray();
+    res.send(result);
+  } catch (error) {
+    console.log(error);
+    res.status(500).send({ message: "Error fetching books" });
   }
-
-  filter.status = "published";
-
-  let sortOptions = {};
-  if (req.query.sort === "price-asc") sortOptions = { price: 1 };
-  if (req.query.sort === "price-desc") sortOptions = { price: -1 };
-
-  const result = await books.find(filter).sort(sortOptions).toArray();
-  res.send(result);
 });
 
 app.get("/books/admin", verifyToken, verifyAdmin, async (req, res) => {
-  const books = await getCollection("books");
-  const result = await books.find().toArray();
+  const database = await connectDB();
+  const result = await database.collection("books").find().toArray();
   res.send(result);
 });
 
@@ -170,8 +202,9 @@ app.get(
   async (req, res) => {
     if (req.params.email !== req.decoded.email)
       return res.status(403).send({ message: "forbidden" });
-    const books = await getCollection("books");
-    const result = await books
+    const database = await connectDB();
+    const result = await database
+      .collection("books")
       .find({ librarianEmail: req.params.email })
       .toArray();
     res.send(result);
@@ -182,8 +215,10 @@ app.get("/books/:id", async (req, res) => {
   try {
     if (!ObjectId.isValid(req.params.id))
       return res.status(400).send({ message: "Invalid ID" });
-    const books = await getCollection("books");
-    const result = await books.findOne({ _id: new ObjectId(req.params.id) });
+    const database = await connectDB();
+    const result = await database
+      .collection("books")
+      .findOne({ _id: new ObjectId(req.params.id) });
     if (!result) return res.status(404).send({ message: "Not found" });
     res.send(result);
   } catch (e) {
@@ -192,13 +227,13 @@ app.get("/books/:id", async (req, res) => {
 });
 
 app.post("/books", verifyToken, verifyLibrarian, async (req, res) => {
-  const books = await getCollection("books");
-  const result = await books.insertOne(req.body);
+  const database = await connectDB();
+  const result = await database.collection("books").insertOne(req.body);
   res.send(result);
 });
 
 app.patch("/books/:id", verifyToken, verifyLibrarian, async (req, res) => {
-  const books = await getCollection("books");
+  const database = await connectDB();
   const item = req.body;
   const updatedDoc = {
     $set: {
@@ -211,42 +246,49 @@ app.patch("/books/:id", verifyToken, verifyLibrarian, async (req, res) => {
       status: item.status,
     },
   };
-  const result = await books.updateOne(
-    { _id: new ObjectId(req.params.id) },
-    updatedDoc
-  );
+  const result = await database
+    .collection("books")
+    .updateOne({ _id: new ObjectId(req.params.id) }, updatedDoc);
   res.send(result);
 });
 
 app.delete("/books/:id", verifyToken, verifyAdmin, async (req, res) => {
-  const books = await getCollection("books");
-  const result = await books.deleteOne({ _id: new ObjectId(req.params.id) });
+  const database = await connectDB();
+  const result = await database
+    .collection("books")
+    .deleteOne({ _id: new ObjectId(req.params.id) });
   res.send(result);
 });
 
 app.patch("/books/status/:id", verifyToken, verifyAdmin, async (req, res) => {
-  const books = await getCollection("books");
-  const result = await books.updateOne(
-    { _id: new ObjectId(req.params.id) },
-    { $set: { status: req.body.status } }
-  );
+  const database = await connectDB();
+  const result = await database
+    .collection("books")
+    .updateOne(
+      { _id: new ObjectId(req.params.id) },
+      { $set: { status: req.body.status } }
+    );
   res.send(result);
 });
 
-// Orders
 app.get("/orders", verifyToken, async (req, res) => {
   if (req.query.email !== req.decoded.email)
     return res.status(403).send({ message: "forbidden" });
-  const orders = await getCollection("orders");
-  const result = await orders.find({ userEmail: req.query.email }).toArray();
+  const database = await connectDB();
+  const result = await database
+    .collection("orders")
+    .find({ userEmail: req.query.email })
+    .toArray();
   res.send(result);
 });
 
 app.get("/orders/:id", verifyToken, async (req, res) => {
   if (!ObjectId.isValid(req.params.id))
     return res.status(400).send({ message: "Invalid ID" });
-  const orders = await getCollection("orders");
-  const result = await orders.findOne({ _id: new ObjectId(req.params.id) });
+  const database = await connectDB();
+  const result = await database
+    .collection("orders")
+    .findOne({ _id: new ObjectId(req.params.id) });
   res.send(result);
 });
 
@@ -257,8 +299,9 @@ app.get(
   async (req, res) => {
     if (req.params.email !== req.decoded.email)
       return res.status(403).send({ message: "forbidden" });
-    const orders = await getCollection("orders");
-    const result = await orders
+    const database = await connectDB();
+    const result = await database
+      .collection("orders")
       .find({ librarianEmail: req.params.email })
       .toArray();
     res.send(result);
@@ -266,14 +309,16 @@ app.get(
 );
 
 app.post("/orders", verifyToken, async (req, res) => {
-  const orders = await getCollection("orders");
-  const result = await orders.insertOne(req.body);
+  const database = await connectDB();
+  const result = await database.collection("orders").insertOne(req.body);
   res.send(result);
 });
 
 app.delete("/orders/:id", verifyToken, async (req, res) => {
-  const orders = await getCollection("orders");
-  const result = await orders.deleteOne({ _id: new ObjectId(req.params.id) });
+  const database = await connectDB();
+  const result = await database
+    .collection("orders")
+    .deleteOne({ _id: new ObjectId(req.params.id) });
   res.send(result);
 });
 
@@ -282,42 +327,52 @@ app.patch(
   verifyToken,
   verifyLibrarian,
   async (req, res) => {
-    const orders = await getCollection("orders");
-    const result = await orders.updateOne(
-      { _id: new ObjectId(req.params.id) },
-      { $set: { status: req.body.status } }
-    );
+    const database = await connectDB();
+    const result = await database
+      .collection("orders")
+      .updateOne(
+        { _id: new ObjectId(req.params.id) },
+        { $set: { status: req.body.status } }
+      );
     res.send(result);
   }
 );
 
 app.get("/wishlist", verifyToken, async (req, res) => {
-  const wishlist = await getCollection("wishlist");
-  const result = await wishlist.find({ email: req.query.email }).toArray();
+  const database = await connectDB();
+  const result = await database
+    .collection("wishlist")
+    .find({ email: req.query.email })
+    .toArray();
   res.send(result);
 });
 
 app.post("/wishlist", verifyToken, async (req, res) => {
-  const wishlist = await getCollection("wishlist");
-  const result = await wishlist.insertOne(req.body);
+  const database = await connectDB();
+  const result = await database.collection("wishlist").insertOne(req.body);
   res.send(result);
 });
 
 app.delete("/wishlist/:id", verifyToken, async (req, res) => {
-  const wishlist = await getCollection("wishlist");
-  const result = await wishlist.deleteOne({ _id: new ObjectId(req.params.id) });
+  const database = await connectDB();
+  const result = await database
+    .collection("wishlist")
+    .deleteOne({ _id: new ObjectId(req.params.id) });
   res.send(result);
 });
 
 app.get("/reviews/:bookId", async (req, res) => {
-  const reviews = await getCollection("reviews");
-  const result = await reviews.find({ bookId: req.params.bookId }).toArray();
+  const database = await connectDB();
+  const result = await database
+    .collection("reviews")
+    .find({ bookId: req.params.bookId })
+    .toArray();
   res.send(result);
 });
 
 app.post("/reviews", verifyToken, async (req, res) => {
-  const reviews = await getCollection("reviews");
-  const result = await reviews.insertOne(req.body);
+  const database = await connectDB();
+  const result = await database.collection("reviews").insertOne(req.body);
   res.send(result);
 });
 
@@ -335,26 +390,34 @@ app.post("/create-payment-intent", verifyToken, async (req, res) => {
 app.get("/payments", verifyToken, async (req, res) => {
   if (req.query.email !== req.decoded.email)
     return res.status(403).send({ message: "forbidden access" });
-  const payments = await getCollection("payments");
-  const result = await payments.find({ email: req.query.email }).toArray();
+  const database = await connectDB();
+  const result = await database
+    .collection("payments")
+    .find({ email: req.query.email })
+    .toArray();
   res.send(result);
 });
 
 app.post("/payments", verifyToken, async (req, res) => {
-  const payments = await getCollection("payments");
-  const paymentResult = await payments.insertOne(req.body);
+  const database = await connectDB();
+  const payment = req.body;
+  const paymentResult = await database
+    .collection("payments")
+    .insertOne(payment);
 
-  const orders = await getCollection("orders");
-  const deleteResult = await orders.updateOne(
-    { _id: new ObjectId(req.body.orderId) },
-    { $set: { paymentStatus: "paid", status: "pending" } }
-  );
+  const deleteResult = await database
+    .collection("orders")
+    .updateOne(
+      { _id: new ObjectId(payment.orderId) },
+      { $set: { paymentStatus: "paid", status: "pending" } }
+    );
 
-  const books = await getCollection("books");
-  const bookUpdate = await books.updateOne(
-    { _id: new ObjectId(req.body.bookId) },
-    { $inc: { quantity: -1 } }
-  );
+  const bookUpdate = await database
+    .collection("books")
+    .updateOne(
+      { _id: new ObjectId(payment.bookId) },
+      { $inc: { quantity: -1 } }
+    );
 
   res.send({ paymentResult, deleteResult, bookUpdate });
 });
