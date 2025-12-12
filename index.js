@@ -199,13 +199,22 @@ app.get(
   verifyToken,
   verifyLibrarian,
   async (req, res) => {
-    if (req.params.email !== req.decoded.email)
-      return res.status(403).send({ message: "forbidden" });
     const database = await connectDB();
-    const result = await database
-      .collection("books")
-      .find({ librarianEmail: req.params.email })
-      .toArray();
+    const requester = await database
+      .collection("users")
+      .findOne({ email: req.decoded.email });
+
+    let query = {};
+
+    if (requester?.role === "admin") {
+      query = {};
+    } else {
+      if (req.params.email !== req.decoded.email)
+        return res.status(403).send({ message: "forbidden" });
+      query = { librarianEmail: req.params.email };
+    }
+
+    const result = await database.collection("books").find(query).toArray();
     res.send(result);
   }
 );
@@ -296,13 +305,22 @@ app.get(
   verifyToken,
   verifyLibrarian,
   async (req, res) => {
-    if (req.params.email !== req.decoded.email)
-      return res.status(403).send({ message: "forbidden" });
     const database = await connectDB();
-    const result = await database
-      .collection("orders")
-      .find({ librarianEmail: req.params.email })
-      .toArray();
+    const requester = await database
+      .collection("users")
+      .findOne({ email: req.decoded.email });
+
+    let query = {};
+
+    if (requester?.role === "admin") {
+      query = {};
+    } else {
+      if (req.params.email !== req.decoded.email)
+        return res.status(403).send({ message: "forbidden" });
+      query = { librarianEmail: req.params.email };
+    }
+
+    const result = await database.collection("orders").find(query).toArray();
     res.send(result);
   }
 );
